@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Studio Room | High Quality Audio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+    <script src="https://www.WebRTC-Experiment.com/RecordRTC.js"></script>
+    <!-- Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body>
+
+    <div class="container">
+        <!-- LANDING VIEW -->
+        <div id="view-landing" class="view active">
+            <h1>Studio Room</h1>
+            <p>High-fidelity remote audio recording.</p>
+            <button class="btn btn-primary" onclick="showCreateRoom()">Create New Room</button>
+            <button class="btn btn-secondary" onclick="showJoinRoom()">Join Existing Room</button>
+        </div>
+
+        <!-- CREATE ROOM VIEW -->
+        <div id="view-create" class="view">
+            <h2>Create Room</h2>
+            <p>Configure your recording session.</p>
+
+            <div class="form-group">
+                <label>Your Name</label>
+                <input type="text" id="create-name" placeholder="e.g. Alice">
+            </div>
+
+            <div class="form-group">
+                <label>Room Topic</label>
+                <input type="text" id="create-topic" placeholder="e.g. Podcast Episode 1">
+            </div>
+
+            <div class="form-group">
+                <label>File Type</label>
+                <select id="config-mime">
+                    <option value="audio/wav">WAV (Lossless)</option>
+                    <option value="audio/webm">WebM (Compact)</option>
+                    <!-- MP3 requires encoder, sticking to browser natives for stability -->
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Sample Rate</label>
+                <select id="config-rate">
+                    <option value="48000">48 kHz (Studio)</option>
+                    <option value="44100" selected>44.1 kHz (CD)</option>
+                    <option value="16000">16 kHz (Voice)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Bitrate</label>
+                <select id="config-bitrate">
+                    <option value="256000">256 kbps</option>
+                    <option value="128000" selected>128 kbps</option>
+                    <option value="64000">64 kbps</option>
+                </select>
+            </div>
+
+            <button class="btn btn-primary" id="btn-create-confirm">Start Session</button>
+            <button class="btn btn-secondary" onclick="showLanding()">Back</button>
+        </div>
+
+        <!-- JOIN ROOM VIEW -->
+        <div id="view-join" class="view">
+            <h2>Join Room</h2>
+            <p>Enter the Room ID to connect.</p>
+
+            <div class="form-group">
+                <label>Your Name</label>
+                <input type="text" id="join-name" placeholder="e.g. Bob">
+            </div>
+
+            <div class="form-group">
+                <label>Room ID</label>
+                <input type="text" id="join-id" placeholder="Paste ID here">
+            </div>
+
+            <button class="btn btn-success" id="btn-join-confirm">Join Session</button>
+            <button class="btn btn-secondary" onclick="showLanding()">Back</button>
+        </div>
+
+        <!-- LOBBY / WAITING VIEW -->
+        <div id="view-lobby" class="view">
+            <h2>Waiting for Participant</h2>
+            <p>Share this Room ID with your guest.</p>
+
+            <div class="form-group">
+                <label>Room ID</label>
+                <div class="copy-input-group">
+                    <input type="text" id="lobby-room-id" readonly>
+                    <button class="btn btn-secondary" style="width: auto; margin:0;" onclick="copyRoomId()">
+                        <i data-lucide="copy"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="loader" style="margin-top: 20px; color: var(--text-secondary);">
+                Waiting for connection...
+            </div>
+        </div>
+
+        <!-- ROOM VIEW -->
+        <div id="view-room" class="view">
+            <div class="room-header">
+                <div id="status-indicator" class="status-badge">Ready</div>
+                <h3 id="room-title">Session Active</h3>
+                <p id="room-topic-display" style="margin: 0; color: var(--primary-color); font-weight: 500;"></p>
+            </div>
+
+            <div class="participants">
+                <div class="participant">
+                    <div class="avatar" id="avatar-local">You</div>
+                    <span class="participant-name" id="name-local">Me</span>
+                </div>
+                <div class="participant">
+                    <div class="avatar" id="avatar-remote">?</div>
+                    <span class="participant-name" id="name-remote">Guest</span>
+                </div>
+            </div>
+
+            <!-- Hidden Audio Elements -->
+            <audio id="audio-local" muted autoplay></audio>
+            <audio id="audio-remote" autoplay></audio>
+
+            <div class="controls">
+                <button class="control-btn" id="btn-mute" title="Mute Mic">
+                    <i data-lucide="mic"></i>
+                </button>
+
+                <!-- Creator Only Controls -->
+                <button class="control-btn" id="btn-record" title="Start Recording"
+                    style="display:none; background-color: var(--primary-color); color: black;">
+                    <i data-lucide="circle"></i>
+                </button>
+
+                <button class="control-btn" id="btn-stop" title="Stop & Save"
+                    style="display:none; background-color: var(--error-color); color: white;">
+                    <i data-lucide="square"></i>
+                </button>
+
+                <button class="control-btn" id="btn-leave" title="Leave Room" style="background-color: #333;">
+                    <i data-lucide="phone-off"></i>
+                </button>
+            </div>
+
+            <div id="log-area"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- STATE & CONFIG ---
+        const state = {
+            role: null, // 'creator' | 'joiner'
+            name: '',
+            remoteName: '',
+            roomId: '',
+            topic: '',
+            config: {}, // { mimeType, sampleRate, bitrate }
+            peer: null,
+            conn: null, // Data connection
+            call: null, // Media connection
+            localStream: null,
+            remoteStream: null,
+            recorder: null,
+            mixedStream: null,
+            audioContext: null,
+            isMuted: false,
+            isRecording: false
+        };
+
+        // --- DOM ELEMENTS ---
+        const views = {
+            landing: document.getElementById('view-landing'),
+            create: document.getElementById('view-create'),
+            join: document.getElementById('view-join'),
+            lobby: document.getElementById('view-lobby'),
+            room: document.getElementById('view-room')
+        };
+
+        const els = {
+            createName: document.getElementById('create-name'),
+            createTopic: document.getElementById('create-topic'),
+            joinName: document.getElementById('join-name'),
+            joinId: document.getElementById('join-id'),
+            lobbyId: document.getElementById('lobby-room-id'),
+            status: document.getElementById('status-indicator'),
+            roomTopic: document.getElementById('room-topic-display'),
+            nameLocal: document.getElementById('name-local'),
+            nameRemote: document.getElementById('name-remote'),
+            avatarLocal: document.getElementById('avatar-local'),
+            avatarRemote: document.getElementById('avatar-remote'),
+            audioLocal: document.getElementById('audio-local'),
+            audioRemote: document.getElementById('audio-remote'),
+            log: document.getElementById('log-area'),
+            btnRecord: document.getElementById('btn-record'),
+            btnStop: document.getElementById('btn-stop'),
+            btnMute: document.getElementById('btn-mute')
+        };
+
+        // --- NAVIGATION ---
+        function switchView(viewName) {
+            Object.values(views).forEach(el => el.classList.remove('active'));
+            views[viewName].classList.add('active');
+        }
+
+        function showCreateRoom() { switchView('create'); }
+        function showJoinRoom() { switchView('join'); }
+        function showLanding() { switchView('landing'); }
+
+        // --- LOGGING ---
+        function log(msg) {
+            const div = document.createElement('div');
+            div.textContent = `> ${msg}`;
+            els.log.appendChild(div);
+            els.log.scrollTop = els.log.scrollHeight;
+            console.log(msg);
+        }
+
+        // --- PEER CONFIG ---
+        const peerConfig = {
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'turn:openrelay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+                ]
+            }
+        };
+
+        // --- INITIALIZATION ---
+        lucide.createIcons();
+
+        // --- CREATOR FLOW ---
+        document.getElementById('btn-create-confirm').onclick = async () => {
+            const name = els.createName.value.trim();
+            const topic = els.createTopic.value.trim();
+
+            if (!name) return alert('Please enter your name');
+
+            state.role = 'creator';
+            state.name = name;
+            state.topic = topic;
+            state.config = {
+                mimeType: document.getElementById('config-mime').value,
+                sampleRate: parseInt(document.getElementById('config-rate').value),
+                bitrate: parseInt(document.getElementById('config-bitrate').value)
+            };
+
+            log('Initializing Peer...');
+            state.peer = new Peer(peerConfig);
+
+            state.peer.on('open', (id) => {
+                state.roomId = id;
+                els.lobbyId.value = id;
+                switchView('lobby');
+                log(`Room Created: ${id}`);
+            });
+
+            state.peer.on('connection', (conn) => {
+                log('Joiner connected via Data Channel');
+                setupDataConnection(conn);
+            });
+
+            state.peer.on('call', async (call) => {
+                log('Incoming audio call...');
+                await handleCall(call);
+            });
+
+            state.peer.on('error', err => log(`Error: ${err.type}`));
+        };
+
+        // --- JOINER FLOW ---
+        document.getElementById('btn-join-confirm').onclick = async () => {
+            const name = els.joinName.value.trim();
+            const roomId = els.joinId.value.trim();
+            if (!name || !roomId) return alert('Please fill in all fields');
+
+            state.role = 'joiner';
+            state.name = name;
+            state.roomId = roomId;
+
+            log('Connecting to Peer...');
+            state.peer = new Peer(peerConfig);
+
+            state.peer.on('open', () => {
+                log('Connected to server. Connecting to room...');
+                const conn = state.peer.connect(roomId);
+                setupDataConnection(conn);
+            });
+
+            state.peer.on('error', err => {
+                log(`Error: ${err.type}`);
+                alert('Could not connect. Check Room ID.');
+            });
+        };
+
+        // --- DATA CONNECTION (Signaling & Status) ---
+        function setupDataConnection(conn) {
+            state.conn = conn;
+
+            conn.on('open', () => {
+                log('Data Channel Open');
+                // Send my name
+                conn.send({ type: 'HELLO', name: state.name });
+
+                // If creator, send topic
+                if (state.role === 'creator' && state.topic) {
+                    conn.send({ type: 'TOPIC', topic: state.topic });
+                }
+            });
+
+            conn.on('data', (data) => {
+                console.log('Received:', data);
+                if (data.type === 'HELLO') {
+                    state.remoteName = data.name;
+                    updateRoomUI();
+
+                    // If I am joiner, initiate the media call now that we are handshaked
+                    if (state.role === 'joiner') {
+                        initiateCall();
+                    }
+                } else if (data.type === 'STATUS') {
+                    handleStatusUpdate(data.status);
+                } else if (data.type === 'TOPIC') {
+                    state.topic = data.topic;
+                    updateRoomUI();
+                }
+            });
+        }
+
+        // --- AUDIO ANALYSIS ---
+        function setupAudioAnalysis(stream, isLocal) {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const avatar = isLocal ? els.avatarLocal : els.avatarRemote;
+
+            function checkVolume() {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const average = sum / dataArray.length;
+
+                // Threshold for "speaking"
+                if (average > 10) {
+                    avatar.classList.add('speaking');
+                } else {
+                    avatar.classList.remove('speaking');
+                }
+
+                requestAnimationFrame(checkVolume);
+            }
+            checkVolume();
+        }
+
+        // --- MEDIA CALL HANDLING ---
+        async function initiateCall() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                state.localStream = stream;
+                els.audioLocal.srcObject = stream;
+
+                // Start local analysis
+                setupAudioAnalysis(stream, true);
+
+                log('Calling creator...');
+                const call = state.peer.call(state.roomId, stream);
+                await handleCall(call);
+            } catch (err) {
+                log('Mic Error: ' + err.message);
+                alert('Microphone access denied.');
+            }
+        }
+
+        async function handleCall(call) {
+            state.call = call;
+
+            // If creator, we need to answer. If joiner, we already have stream.
+            if (!state.localStream) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    state.localStream = stream;
+                    els.audioLocal.srcObject = stream;
+
+                    // Start local analysis
+                    setupAudioAnalysis(stream, true);
+
+                    call.answer(stream);
+                } catch (err) {
+                    log('Mic Error: ' + err.message);
+                    return;
+                }
+            }
+
+            call.on('stream', (remoteStream) => {
+                state.remoteStream = remoteStream;
+                els.audioRemote.srcObject = remoteStream;
+                els.audioRemote.play().catch(e => log('Autoplay error: ' + e));
+
+                // Start remote analysis
+                setupAudioAnalysis(remoteStream, false);
+
+                log('Audio Connected');
+
+                // Transition to Room View
+                switchView('room');
+                updateRoomUI();
+
+                if (state.role === 'creator') {
+                    els.btnRecord.style.display = 'flex';
+                }
+
+                setStatus('Connected');
+            });
+
+            call.on('close', () => {
+                log('Call Ended');
+                setStatus('Call Ended');
+                alert('Call ended.');
+                location.reload();
+            });
+        }
+
+        // --- UI UPDATES ---
+        function updateRoomUI() {
+            els.nameLocal.textContent = state.name;
+            els.nameRemote.textContent = state.remoteName || 'Connecting...';
+            els.avatarLocal.textContent = state.name.charAt(0).toUpperCase();
+            els.avatarRemote.textContent = (state.remoteName || '?').charAt(0).toUpperCase();
+
+            if (state.topic) {
+                els.roomTopic.textContent = state.topic;
+            }
+        }
+
+        function setStatus(text, type = 'default') {
+            els.status.textContent = text;
+            els.status.className = 'status-badge';
+            if (text.includes('Recording')) els.status.classList.add('recording');
+            else if (text.includes('Connected')) els.status.classList.add('connected');
+        }
+
+        function handleStatusUpdate(statusType) {
+            if (statusType === 'RECORDING_STARTED') {
+                setStatus('Recording Started');
+            } else if (statusType === 'RECORDING_STOPPED') {
+                setStatus('Recording Stopped');
+            }
+        }
+
+        // --- RECORDING LOGIC (Creator Only) ---
+        els.btnRecord.onclick = async () => {
+            if (state.isRecording) return;
+
+            // Mix streams
+            const mixed = await mixStreams(state.localStream, state.remoteStream);
+            if (!mixed) return;
+
+            state.recorder = new RecordRTC(mixed, {
+                type: 'audio',
+                mimeType: state.config.mimeType,
+                numberOfAudioChannels: 2,
+                desiredSampRate: state.config.sampleRate,
+                bitrate: state.config.bitrate,
+                recorderType: StereoAudioRecorder
+            });
+
+            state.recorder.startRecording();
+            state.isRecording = true;
+
+            // Update UI & Notify Peer
+            setStatus('Recording Started');
+            state.conn.send({ type: 'STATUS', status: 'RECORDING_STARTED' });
+
+            els.btnRecord.style.display = 'none';
+            els.btnStop.style.display = 'flex';
+
+            log('Recording started...');
+        };
+
+        els.btnStop.onclick = () => {
+            if (!state.recorder) return;
+
+            state.recorder.stopRecording(async () => {
+                const blob = state.recorder.getBlob();
+                const timestamp = Date.now();
+
+                // 1. Download Combined Stereo
+                downloadBlob(blob, `session-stereo-${timestamp}.wav`);
+
+                // 2. Extract & Download Individual Channels
+                try {
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+                    // Extract Left (Speaker A)
+                    const leftBuffer = extractChannelBuffer(audioCtx, audioBuffer, 0);
+                    const leftBlob = audioBufferToWav(leftBuffer);
+                    downloadBlob(leftBlob, `speaker-a-local-${timestamp}.wav`);
+
+                    // Extract Right (Speaker B)
+                    const rightBuffer = extractChannelBuffer(audioCtx, audioBuffer, 1);
+                    const rightBlob = audioBufferToWav(rightBuffer);
+                    downloadBlob(rightBlob, `speaker-b-remote-${timestamp}.wav`);
+
+                } catch (err) {
+                    log('Error extracting channels: ' + err.message);
+                }
+
+                state.isRecording = false;
+                setStatus('Recording Stopped');
+                state.conn.send({ type: 'STATUS', status: 'RECORDING_STOPPED' });
+
+                els.btnRecord.style.display = 'flex';
+                els.btnStop.style.display = 'none';
+
+                log('All files downloaded.');
+            });
+        };
+
+        function extractChannelBuffer(ctx, sourceBuffer, channelIndex) {
+            const length = sourceBuffer.length;
+            const sampleRate = sourceBuffer.sampleRate;
+            const newBuffer = ctx.createBuffer(1, length, sampleRate); // Mono buffer
+            newBuffer.copyToChannel(sourceBuffer.getChannelData(channelIndex), 0);
+            return newBuffer;
+        }
+
+        function audioBufferToWav(buffer) {
+            const numChannels = buffer.numberOfChannels;
+            const sampleRate = buffer.sampleRate;
+            const format = 1; // PCM
+            const bitDepth = 16;
+
+            const bytesPerSample = bitDepth / 8;
+            const blockAlign = numChannels * bytesPerSample;
+
+            const bufferLength = buffer.length;
+            const byteRate = sampleRate * blockAlign;
+            const dataSize = bufferLength * blockAlign;
+
+            const bufferArray = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(bufferArray);
+
+            const writeString = (view, offset, string) => {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            };
+
+            // RIFF chunk
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + dataSize, true);
+            writeString(view, 8, 'WAVE');
+
+            // fmt chunk
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
+            view.setUint16(20, format, true);
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, bitDepth, true);
+
+            // data chunk
+            writeString(view, 36, 'data');
+            view.setUint32(40, dataSize, true);
+
+            // Write data
+            const offset = 44;
+            const data = buffer.getChannelData(0);
+            let pos = offset;
+
+            for (let i = 0; i < bufferLength; i++) {
+                let sample = Math.max(-1, Math.min(1, data[i])); // Clamp
+                sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF; // Scale to 16-bit
+                view.setInt16(pos, sample, true);
+                pos += 2;
+            }
+
+            return new Blob([bufferArray], { type: 'audio/wav' });
+        }
+
+        // --- HELPERS ---
+        async function mixStreams(stream1, stream2) {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const dest = ctx.createMediaStreamDestination();
+
+            // Speaker A (Local) -> Left Channel
+            if (stream1.getAudioTracks().length > 0) {
+                const src1 = ctx.createMediaStreamSource(stream1);
+                const panner1 = ctx.createStereoPanner();
+                panner1.pan.value = -1; // Full Left
+                src1.connect(panner1).connect(dest);
+            }
+
+            // Speaker B (Remote) -> Right Channel
+            if (stream2.getAudioTracks().length > 0) {
+                const src2 = ctx.createMediaStreamSource(stream2);
+                const panner2 = ctx.createStereoPanner();
+                panner2.pan.value = 1; // Full Right
+                src2.connect(panner2).connect(dest);
+            }
+
+            return dest.stream;
+        }
+
+        function getExtension() {
+            if (state.config.mimeType === 'audio/wav') return 'wav';
+            if (state.config.mimeType === 'audio/webm') return 'webm';
+            return 'audio';
+        }
+
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function copyRoomId() {
+            const id = els.lobbyId.value;
+            navigator.clipboard.writeText(id);
+            alert('Copied to clipboard!');
+        }
+
+        // --- MUTE TOGGLE ---
+        els.btnMute.onclick = () => {
+            if (!state.localStream) return;
+            state.isMuted = !state.isMuted;
+            state.localStream.getAudioTracks()[0].enabled = !state.isMuted;
+
+            const icon = els.btnMute.querySelector('i');
+            if (state.isMuted) {
+                els.btnMute.classList.add('active');
+                icon.setAttribute('data-lucide', 'mic-off');
+            } else {
+                els.btnMute.classList.remove('active');
+                icon.setAttribute('data-lucide', 'mic');
+            }
+            lucide.createIcons();
+        };
+
+        // --- LEAVE ---
+        document.getElementById('btn-leave').onclick = () => {
+            if (confirm('Are you sure you want to leave?')) {
+                location.reload();
+            }
+        };
+
+    </script>
+</body>
+
+</html>
